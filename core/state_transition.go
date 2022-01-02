@@ -228,6 +228,11 @@ func (st *StateTransition) preCheck() error {
 			return fmt.Errorf("%w: address %v, codehash: %s", ErrSenderNoEOA,
 				st.msg.From().Hex(), codeHash)
 		}
+		// Make sure the sender is an EOA
+		if codeHash := st.state.GetCodeHash(st.msg.From()); codeHash != emptyCodeHash && codeHash != (common.Hash{}) {
+			return fmt.Errorf("%w: address %v, codehash: %s", ErrSenderNoEOA,
+				st.msg.From().Hex(), codeHash)
+		}
 	}
 	// Make sure that transaction gasFeeCap is greater than the baseFee (post london)
 	if st.evm.ChainConfig().IsLondon(st.evm.Context.BlockNumber) {
@@ -247,10 +252,10 @@ func (st *StateTransition) preCheck() error {
 			}
 			// This will panic if baseFee is nil, but basefee presence is verified
 			// as part of header validation.
-			if st.gasFeeCap.Cmp(st.evm.Context.BaseFee) < 0 {
-				return fmt.Errorf("%w: address %v, maxFeePerGas: %s baseFee: %s", ErrFeeCapTooLow,
-					st.msg.From().Hex(), st.gasFeeCap, st.evm.Context.BaseFee)
-			}
+			//if st.gasFeeCap.Cmp(st.evm.Context.BaseFee) < 0 {
+			//	return fmt.Errorf("%w: address %v, maxFeePerGas: %s baseFee: %s", ErrFeeCapTooLow,
+			//		st.msg.From().Hex(), st.gasFeeCap, st.evm.Context.BaseFee)
+			//}
 		}
 	}
 	return st.buyGas()

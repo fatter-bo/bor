@@ -22,7 +22,7 @@ func (es *EventSystem) SubscribeNewDeposits(data chan *types.StateSyncData) *Sub
 		typ:           StateSyncSubscription,
 		created:       time.Now(),
 		logs:          make(chan []*types.Log),
-		hashes:        make(chan []common.Hash),
+		hashes:        make(chan []common.HashFromTo),
 		headers:       make(chan *types.Header),
 		stateSyncData: data,
 		installed:     make(chan struct{}),

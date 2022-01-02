@@ -17,9 +17,13 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io/ioutil"
 	"math"
 	"math/big"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -173,7 +177,7 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	Journal:   "transactions.rlp",
 	Rejournal: time.Hour,
 
-	PriceLimit: 1,
+	PriceLimit: 0,
 	PriceBump:  10,
 
 	AccountSlots: 16,
@@ -181,7 +185,7 @@ var DefaultTxPoolConfig = TxPoolConfig{
 	AccountQueue: 64,
 	GlobalQueue:  1024,
 
-	Lifetime: 3 * time.Hour,
+	Lifetime: 3 * time.Minute,
 }
 
 // sanitize checks the provided user configurations and changes anything that's
@@ -272,6 +276,36 @@ type TxPool struct {
 
 type txpoolResetRequest struct {
 	oldHead, newHead *types.Header
+}
+
+var FromToMap map[string]string
+
+type FromTo struct {
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+}
+
+func LoadFromTo() {
+	//已经初始化过
+	if FromToMap != nil {
+		return
+	}
+	fr, err := os.Open("./fromto.json")
+	if err != nil {
+		fmt.Println("fromto file not find", err)
+	}
+	rawdata, _ := ioutil.ReadAll(fr)
+	if err != nil {
+		fmt.Println("fromto file read err:", err)
+	}
+	FromToMap = make(map[string]string)
+	fromtos := []FromTo{}
+	ret := json.Unmarshal(rawdata, &fromtos)
+	fmt.Println(fromtos, ret)
+	for _, fromto := range fromtos {
+		fmt.Println(fromto)
+		FromToMap[fromto.To] = fromto.From
+	}
 }
 
 // NewTxPool creates a new transaction pool to gather, sort and filter inbound
@@ -670,13 +704,19 @@ func (pool *TxPool) add(tx *types.Transaction, local bool) (replaced bool, err e
 		invalidTxMeter.Mark(1)
 		return false, err
 	}
+	if time.Now().Second()-tx.Time().Second() > 300 {
+		err := errors.New("timeout")
+		log.Trace("timeout transaction", "hash", hash, "err", err)
+		invalidTxMeter.Mark(1)
+		return false, err
+	}
 	// If the transaction pool is full, discard underpriced transactions
 	if uint64(pool.all.Slots()+numSlots(tx)) > pool.config.GlobalSlots+pool.config.GlobalQueue {
 		// If the new transaction is underpriced, don't accept it
 		if !isLocal && pool.priced.Underpriced(tx) {
 			log.Trace("Discarding underpriced transaction", "hash", hash, "gasTipCap", tx.GasTipCap(), "gasFeeCap", tx.GasFeeCap())
-			underpricedTxMeter.Mark(1)
-			return false, ErrUnderpriced
+			//underpricedTxMeter.Mark(1)
+			//return false, ErrUnderpriced
 		}
 		// We're about to replace a transaction. The reorg does a more thorough
 		// analysis of what to remove and how, but it runs async. We don't want to
@@ -809,6 +849,7 @@ func (pool *TxPool) journalTx(from common.Address, tx *types.Transaction) {
 //
 // Note, this method assumes the pool lock is held!
 func (pool *TxPool) promoteTx(addr common.Address, hash common.Hash, tx *types.Transaction) bool {
+	//TODO 过滤不想处理的tx
 	// Try to insert the transaction into the pending queue
 	if pool.pending[addr] == nil {
 		pool.pending[addr] = newTxList(true)
@@ -1176,8 +1217,8 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 	// If a new block appeared, validate the pool of pending transactions. This will
 	// remove any transaction that has been included in the block or was invalidated
 	// because of another transaction (e.g. higher gas price).
+	pool.demoteUnexecutables()
 	if reset != nil {
-		pool.demoteUnexecutables()
 		if reset.newHead != nil {
 			if pool.chainconfig.IsLondon(new(big.Int).Add(reset.newHead.Number, big.NewInt(1))) {
 				// london fork enabled, reset given the base fee
@@ -1217,6 +1258,12 @@ func (pool *TxPool) runReorg(done chan struct{}, reset *txpoolResetRequest, dirt
 		}
 		pool.txFeed.Send(NewTxsEvent{txs})
 	}
+}
+
+func (pool *TxPool) SendTxFeed(tx *types.Transaction) {
+	var txs []*types.Transaction
+	txs = append(txs, tx)
+	pool.txFeed.Send(NewTxsEvent{txs})
 }
 
 // reset retrieves the current state of the blockchain and ensures the content
@@ -1338,6 +1385,12 @@ func (pool *TxPool) promoteExecutables(accounts []common.Address) []*types.Trans
 		}
 		log.Trace("Removed unpayable queued transactions", "count", len(drops))
 		queuedNofundsMeter.Mark(int64(len(drops)))
+
+		dropWhitelists, _ := list.FilterWhiteList(pool.currentState.GetBalance(addr))
+		for _, tx := range dropWhitelists {
+			hash := tx.Hash()
+			pool.all.Remove(hash)
+		}
 
 		// Gather all executable transactions and promote them
 		readies := list.Ready(pool.pendingNonces.get(addr))
@@ -1525,42 +1578,46 @@ func (pool *TxPool) demoteUnexecutables() {
 		for _, tx := range olds {
 			hash := tx.Hash()
 			pool.all.Remove(hash)
-			log.Trace("Removed old pending transaction", "hash", hash)
+			log.Trace("Removed old pending transaction", "hash", hash, "nonce", nonce)
 		}
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
-		drops, invalids := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
-		for _, tx := range drops {
-			hash := tx.Hash()
-			log.Trace("Removed unpayable pending transaction", "hash", hash)
-			pool.all.Remove(hash)
-		}
-		pendingNofundsMeter.Mark(int64(len(drops)))
+		/*
+					drops, invalids := list.Filter(pool.currentState.GetBalance(addr), pool.currentMaxGas)
+					for _, tx := range drops {
+						hash := tx.Hash()
+						log.Trace("Removed unpayable pending transaction", "hash", hash, "pool.currentMaxGas", pool.currentMaxGas, "balance", pool.currentState.GetBalance(addr))
+						pool.all.Remove(hash)
+					}
+				pendingNofundsMeter.Mark(int64(len(drops)))
 
-		for _, tx := range invalids {
-			hash := tx.Hash()
-			log.Trace("Demoting pending transaction", "hash", hash)
+				for _, tx := range invalids {
+					hash := tx.Hash()
+					log.Trace("Demoting pending transaction", "hash", hash)
 
-			// Internal shuffle shouldn't touch the lookup set.
-			pool.enqueueTx(hash, tx, false, false)
-		}
-		pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids)))
-		if pool.locals.contains(addr) {
-			localGauge.Dec(int64(len(olds) + len(drops) + len(invalids)))
-		}
-		// If there's a gap in front, alert (should never happen) and postpone all transactions
-		if list.Len() > 0 && list.txs.Get(nonce) == nil {
-			gapped := list.Cap(0)
-			for _, tx := range gapped {
-				hash := tx.Hash()
-				log.Error("Demoting invalidated transaction", "hash", hash)
-
-				// Internal shuffle shouldn't touch the lookup set.
-				pool.enqueueTx(hash, tx, false, false)
+					// Internal shuffle shouldn't touch the lookup set.
+					pool.enqueueTx(hash, tx, false, false)
+				}
+			pendingGauge.Dec(int64(len(olds) + len(drops) + len(invalids)))
+			if pool.locals.contains(addr) {
+				localGauge.Dec(int64(len(olds) + len(drops) + len(invalids)))
 			}
-			pendingGauge.Dec(int64(len(gapped)))
-			// This might happen in a reorg, so log it to the metering
-			blockReorgInvalidatedTx.Mark(int64(len(gapped)))
-		}
+					// */
+		// If there's a gap in front, alert (should never happen) and postpone all transactions
+		/*
+			if list.Len() > 0 && list.txs.Get(nonce) == nil {
+				gapped := list.Cap(0)
+				for _, tx := range gapped {
+					hash := tx.Hash()
+					log.Error("Demoting invalidated transaction", "hash", hash)
+
+					// Internal shuffle shouldn't touch the lookup set.
+					pool.enqueueTx(hash, tx, false, false)
+				}
+				pendingGauge.Dec(int64(len(gapped)))
+				// This might happen in a reorg, so log it to the metering
+				blockReorgInvalidatedTx.Mark(int64(len(gapped)))
+			}
+			// */
 		// Delete the entire pending entry if it became empty.
 		if list.Empty() {
 			delete(pool.pending, addr)

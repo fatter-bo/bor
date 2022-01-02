@@ -61,6 +61,7 @@ type Transaction struct {
 // NewTx creates a new transaction.
 func NewTx(inner TxData) *Transaction {
 	tx := new(Transaction)
+	//tx.CheckTime()
 	tx.setDecoded(inner.copy(), 0)
 	return tx
 }
@@ -85,6 +86,16 @@ type TxData interface {
 
 	rawSignatureValues() (v, r, s *big.Int)
 	setSignatureValues(chainID, v, r, s *big.Int)
+}
+
+func (tx *Transaction) CheckTime() {
+	if time.Now().Second() < tx.time.Second() {
+		tx.time = time.Now()
+	}
+}
+
+func (tx *Transaction) Time() time.Time {
+	return tx.time
 }
 
 // EncodeRLP implements rlp.Encoder
@@ -511,7 +522,7 @@ func NewTransactionsByPriceAndNonce(signer Signer, txs map[common.Address]Transa
 	heads := make(TxByPriceAndTime, 0, len(txs))
 	for from, accTxs := range txs {
 		acc, _ := Sender(signer, accTxs[0])
-		wrapped, err := NewTxWithMinerFee(accTxs[0], baseFee)
+		wrapped, err := NewTxWithMinerFee(accTxs[0], nil) //baseFee
 		// Remove transaction if sender doesn't match from, or if wrapping fails.
 		if acc != from || err != nil {
 			delete(txs, from)
@@ -537,6 +548,10 @@ func (t *TransactionsByPriceAndNonce) Peek() *Transaction {
 		return nil
 	}
 	return t.heads[0].tx
+}
+
+func (t *TransactionsByPriceAndNonce) GetTxs() map[common.Address]Transactions {
+	return t.txs
 }
 
 // Shift replaces the current best head with the next one from the same account.

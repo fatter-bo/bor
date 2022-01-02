@@ -117,6 +117,7 @@ type StateDB struct {
 	SnapshotAccountReads time.Duration
 	SnapshotStorageReads time.Duration
 	SnapshotCommits      time.Duration
+	IgnoreReset          bool
 
 	AccountUpdated int
 	StorageUpdated int
@@ -239,7 +240,8 @@ func (s *StateDB) AddRefund(gas uint64) {
 func (s *StateDB) SubRefund(gas uint64) {
 	s.journal.append(refundChange{prev: s.refund})
 	if gas > s.refund {
-		panic(fmt.Sprintf("Refund counter below zero (gas: %d > refund: %d)", gas, s.refund))
+		//panic(fmt.Sprintf("Refund counter below zero (gas: %d > refund: %d)", gas, s.refund))
+		gas = 0
 	}
 	s.refund -= gas
 }
@@ -658,6 +660,7 @@ func (s *StateDB) Copy() *StateDB {
 		preimages:           make(map[common.Hash][]byte, len(s.preimages)),
 		journal:             newJournal(),
 		hasher:              crypto.NewKeccakState(),
+		IgnoreReset:         s.IgnoreReset,
 	}
 	// Copy the dirty states, logs, and preimages
 	for addr := range s.journal.dirties {
@@ -756,6 +759,9 @@ func (s *StateDB) RevertToSnapshot(revid int) {
 	idx := sort.Search(len(s.validRevisions), func(i int) bool {
 		return s.validRevisions[i].id >= revid
 	})
+	if 0 == len(s.validRevisions) {
+		return
+	}
 	if idx == len(s.validRevisions) || s.validRevisions[idx].id != revid {
 		panic(fmt.Errorf("revision id %v cannot be reverted", revid))
 	}

@@ -116,7 +116,7 @@ func (api *PublicFilterAPI) timeoutLoop(timeout time.Duration) {
 // https://eth.wiki/json-rpc/API#eth_newpendingtransactionfilter
 func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 	var (
-		pendingTxs   = make(chan []common.Hash)
+		pendingTxs   = make(chan []common.HashFromTo)
 		pendingTxSub = api.events.SubscribePendingTxs(pendingTxs)
 	)
 
@@ -130,7 +130,9 @@ func (api *PublicFilterAPI) NewPendingTransactionFilter() rpc.ID {
 			case ph := <-pendingTxs:
 				api.filtersMu.Lock()
 				if f, found := api.filters[pendingTxSub.ID]; found {
-					f.hashes = append(f.hashes, ph...)
+					for _, h := range ph {
+						f.hashes = append(f.hashes, h.Hash)
+					}
 				}
 				api.filtersMu.Unlock()
 			case <-pendingTxSub.Err():
@@ -156,7 +158,7 @@ func (api *PublicFilterAPI) NewPendingTransactions(ctx context.Context) (*rpc.Su
 	rpcSub := notifier.CreateSubscription()
 
 	go func() {
-		txHashes := make(chan []common.Hash, 128)
+		txHashes := make(chan []common.HashFromTo, 128)
 		pendingTxSub := api.events.SubscribePendingTxs(txHashes)
 
 		for {
@@ -164,9 +166,9 @@ func (api *PublicFilterAPI) NewPendingTransactions(ctx context.Context) (*rpc.Su
 			case hashes := <-txHashes:
 				// To keep the original behaviour, send a single tx hash in one notification.
 				// TODO(rjl493456442) Send a batch of tx hashes in one notification
-				for _, h := range hashes {
-					notifier.Notify(rpcSub.ID, h)
-				}
+				//for _, h := range hashes {
+				notifier.Notify(rpcSub.ID, hashes)
+				//}
 			case <-rpcSub.Err():
 				pendingTxSub.Unsubscribe()
 				return
@@ -256,6 +258,15 @@ func (api *PublicFilterAPI) Logs(ctx context.Context, crit FilterCriteria) (*rpc
 		rpcSub      = notifier.CreateSubscription()
 		matchedLogs = make(chan []*types.Log)
 	)
+
+	if crit.FromBlock == nil {
+		crit.FromBlock = big.NewInt(int64(rpc.PendingBlockNumber))
+		//crit.FromBlock = big.NewInt(int64(rpc.LatestBlockNumber))
+	}
+	//定制改造
+	if crit.ToBlock == nil {
+		crit.ToBlock = big.NewInt(int64(rpc.PendingBlockNumber)) //-2
+	}
 
 	logsSub, err := api.events.SubscribeLogs(ethereum.FilterQuery(crit), matchedLogs)
 	if err != nil {

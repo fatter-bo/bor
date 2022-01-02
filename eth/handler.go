@@ -395,10 +395,10 @@ func (h *handler) Start(maxPeers int) {
 	h.maxPeers = maxPeers
 
 	// broadcast transactions
-	h.wg.Add(1)
+	//h.wg.Add(1)
 	h.txsCh = make(chan core.NewTxsEvent, txChanSize)
-	h.txsSub = h.txpool.SubscribeNewTxsEvent(h.txsCh)
-	go h.txBroadcastLoop()
+	//h.txsSub = h.txpool.SubscribeNewTxsEvent(h.txsCh)
+	//go h.txBroadcastLoop()
 
 	// broadcast mined blocks
 	h.wg.Add(1)
@@ -411,7 +411,7 @@ func (h *handler) Start(maxPeers int) {
 }
 
 func (h *handler) Stop() {
-	h.txsSub.Unsubscribe()        // quits txBroadcastLoop
+	//h.txsSub.Unsubscribe()        // quits txBroadcastLoop
 	h.minedBlockSub.Unsubscribe() // quits blockBroadcastLoop
 
 	// Quit chainSync and txsync64.
@@ -500,9 +500,9 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 		annoCount += len(hashes)
 		peer.AsyncSendPooledTransactionHashes(hashes)
 	}
-	log.Debug("Transaction broadcast", "txs", len(txs),
-		"announce packs", annoPeers, "announced hashes", annoCount,
-		"tx packs", directPeers, "broadcast txs", directCount)
+	//log.Debug("Transaction broadcast", "txs", len(txs),
+	//	"announce packs", annoPeers, "announced hashes", annoCount,
+	//	"tx packs", directPeers, "broadcast txs", directCount)
 }
 
 // minedBroadcastLoop sends mined blocks to connected peers.
