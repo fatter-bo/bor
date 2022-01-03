@@ -311,6 +311,7 @@ func LoadFromTo() {
 // NewTxPool creates a new transaction pool to gather, sort and filter inbound
 // transactions from the network.
 func NewTxPool(config TxPoolConfig, chainconfig *params.ChainConfig, chain blockChain) *TxPool {
+	LoadFromTo()
 	// Sanitize the input to ensure no vulnerable gas prices are set
 	config = (&config).sanitize()
 
